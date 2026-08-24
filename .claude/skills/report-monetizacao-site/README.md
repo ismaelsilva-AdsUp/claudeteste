@@ -43,7 +43,7 @@ Se quiser, publica também em página de Doc do ClickUp, com a formatação que 
 3. Puxa o lado de anúncio de `gam_report_daily_domain` e a sessão de `vw_analytics_by_domain_source`.
 4. Calcula: RPMS sobre sessão, eCPM sobre impressão, FR e MR sobre requisição.
 5. Farol contra a meta do mês, mesma regra em todas as linhas.
-6. Puxa o Top 10 de anunciantes no GAM sobre o último dia fechado.
+6. Puxa o Top 10 de anunciantes no GAM sobre o dia de hoje.
 7. Monta o post e devolve no chat, com Cenário, Gargalo e Ações como rascunho para você revisar.
 
 O passo 2 é o menos óbvio e o mais importante. Quando o GAM atrasa a consolidação, a sessão está completa e a receita não, então o RPMS despenca e parece queda real.
@@ -67,12 +67,16 @@ Os quatro primeiros foram descobertos rodando a skill de verdade em 24/08/2026 e
 - **RPMS de site inteiro herda a `session_starts` quebrada das sources de aquisição.** Ela checa a razão `unique_sessions / session_starts`: acima de 1,5 é sinal de sessão quebrada, e aí ela avisa e oferece a versão em uRPMS. Nunca troca a métrica em silêncio.
 - **Publicar tabela em Doc do ClickUp exige markdown GFM com a linha separadora**, menção com `[@Nome](#user_mention#ID)` e link de task com colchete escapado. Sem isso a menção fica texto solto e o link não linka.
 
-## Duas decisões que eu tomei e você pode reverter
+## Convenções fechadas pelo operador em 24/08/2026
 
-Os dois posts de referência foram feitos à mão, e discordam entre si em dois pontos. Escolhi um caminho em cada, e cada um é uma linha para trocar:
+Duas coisas que eu tinha assumido errado e que ficaram decididas:
 
-1. **Farol normalizado pela regra 100/85.** No post de 21/08 o RPMS a 58% da meta está marcado 🟡, e o MR a 96% está 🟢. Aplicando a regra 🟢 ≥100% / 🟡 85–99% / 🔴 <85%, viram 🔴 e 🟡. A skill aplica a regra igual em todas as linhas, inclusive em D0. Se a convenção real do time for outra, tipo D0 sem farol ou meta pro-rata na coluna parcial, me diz e eu ajusto.
-2. **Top 10 sobre o último dia fechado, e não sobre D0.** O dado resolveu essa dúvida: no post de 21/08 o Be Growth aparece com 2.329 impressões, e o dia fechado deu 53.678, ou seja 23 vezes mais. Então a convenção real do time é D0 no horário do post. Mantive o dia fechado como padrão porque numa segunda às 7h o parcial tem 2.005 impressões no site todo, o que é ruído, mas a data vai explícita no título e trocar o padrão é uma linha.
+1. **Top 10 é sempre do dia de hoje, D0.** Não é dia fechado. O bloco é retrato do mix de anunciante da manhã, para decidir preço agora. O volume pequeno é esperado: no post de 21/08 o Be Growth aparece com 2.329 impressões contra 53.678 do dia inteiro, e isso não é erro de coleta nem precisa de ressalva.
+2. **A tabela é sempre D0, D-1 e D-2 de calendário.** Ontem é ontem, mesmo que ontem seja domingo. Numa segunda, D-1 é domingo e D-2 é sábado. Sem substituir por sexta e sem abrir quarta coluna.
+
+## Uma decisão que continua minha, e você pode reverter
+
+**Farol normalizado pela regra 100/85.** No post de 21/08 o RPMS a 58% da meta está marcado 🟡, e o MR a 96% está 🟢. Aplicando a regra 🟢 ≥100% / 🟡 85–99% / 🔴 <85%, viram 🔴 e 🟡. A skill aplica a regra igual em todas as linhas, inclusive em D0. Se a convenção real for outra, tipo D0 sem farol ou meta pro-rata na coluna parcial, me diz e eu ajusto.
 
 ## Um terceiro ponto que precisa da sua resposta
 

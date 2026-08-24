@@ -24,9 +24,9 @@ Diferente da `report-diario-monetizacao`, que é por source de um squad. Esta é
 
 Um site por vez. O operador diz qual. Exemplo do formato validado: `oguiadocredito.com`.
 
-Três colunas de dado: **D0** (hoje, parcial), **D-1** e **D-2**.
+Três colunas de dado, sempre: **D0** (hoje, parcial), **D-1** (ontem) e **D-2** (antes de ontem).
 
-**Na segunda, abrir quatro colunas:** D0, domingo, sábado e sexta. Sem isso o fim de semana desaparece do histórico. A leitura de referência é o domingo, que é o último dia fechado.
+**São dias de calendário literais, inclusive na segunda.** Numa segunda, D-1 é domingo e D-2 é sábado. Não substituir por sexta, não abrir quarta coluna, não pular o fim de semana. Definido pelo operador em 24/08/2026.
 
 ## Metas
 
@@ -128,9 +128,9 @@ GROUP BY date ORDER BY date
 
 ### Top 10 anunciantes (GAM)
 
-Por padrão, sobre o **último dia fechado**, com a data explícita no título. Mix de anunciante em dia parcial é ruído: numa segunda às 7h o site inteiro tem 2.005 impressões.
+**Sempre sobre D0, o dia de hoje**, com a data de hoje no título. Definido pelo operador em 24/08/2026. Não usar dia fechado.
 
-Os posts de referência usam **D0 no horário do post**. Dá para ver no de 21/08, onde o Be Growth aparece com 2.329 impressões contra 53.678 do dia fechado. Se o operador preferir manter D0, é ele que pede, e a data no título muda junto.
+O bloco é um retrato do mix de anunciante da manhã, para decidir preço agora, não um fechamento. Então o volume é pequeno de propósito: no post de 21/08 o Be Growth aparece com 2.329 impressões, contra 53.678 do dia inteiro. Isso é esperado, não é erro de coleta, e não precisa de ressalva no post.
 
 1. Confirmar o `networkCode` do domínio em `dim_sites` antes de rodar. A maioria dos domínios está em FDR|GRIDMIDIA (`22002220734`), mas domínio de outra squad fica em rede própria.
 2. `gam_run_custom_report` com dimension `CLASSIFIED_ADVERTISER_NAME` (junto com `AD_UNIT_NAME` só quando o operador quiser a quebra por bloco).
@@ -138,7 +138,7 @@ Os posts de referência usam **D0 no horário do post**. Dá para ver no de 21/0
 4. **`AD_REQUESTS` não funciona com anunciante.** Testado em 24/08/2026 nas duas formas, com cinco métricas e com ela sozinha: as duas voltam `REPORT_ERROR_CONSTRAINTS_INCOMPATIBILITY`. Ou seja, **não existe coluna Req por anunciante neste relatório**. Se o operador pedir, dizer que não sai daqui em vez de improvisar. O mesmo vale para `PROGRAMMATIC_MATCH_RATE`.
 5. **Não pedir `AD_EXCHANGE_MATCH_RATE` nessa dimensão.** Ela volta 100% em todos os anunciantes, porque no grão do anunciante só existe quem já ganhou o leilão. Número sem significado na tabela.
 6. Filtros: `{"fieldName":"SITE","values":["<site>"],"not":false}` e, quando for por source, `{"fieldName":"CHANNEL","operation":"CONTAINS","values":["utm_source=<source>"]}`.
-7. Ordenar por impressões, cortar em 10. Conferir o total do `summary` contra a receita do dia em `gam_report_daily_domain`: em 21/08/2026 deu $10.742,55 contra $10.742,83, o que valida a chamada.
+7. Ordenar por impressões, cortar em 10. Para conferir se a chamada está certa, comparar o total do `summary` contra a receita do mesmo dia em `gam_report_daily_domain`: num dia fechado de teste deu $10.742,55 contra $10.742,83. Em D0 os dois também têm que bater entre si, mesmo com volume pequeno.
 
 Quando o operador quiser causa de queda, rodar D-1 e D-2 em chamadas separadas de um dia cada e comparar participação: anunciante que **saiu** ou **caiu de participação** é candidato a causa.
 
@@ -167,15 +167,15 @@ Ações para hoje (ordem de prioridade):
 1. <ação em imperativo>
 2. <ação em imperativo>
 
-🏆 Top 10 Anunciantes por Impressões — DD/MM
+🏆 Top 10 Anunciantes por Impressões — DD/MM (hoje)
 
 📊 <Nome do site>
 
 1º <Anunciante>
- ¬ Impressões: 53.678 | eCPM: $117,18 | CTR: 58,04% | Receita: $6.289,96
+ ¬ Impressões: 2.329 | eCPM: $85,82 | CTR: 45,43% | Receita: $199,88
 
 2º <Anunciante>
- ¬ Impressões: 14.586 | eCPM: $84,98 | CTR: 49,22% | Receita: $1.239,50
+ ¬ Impressões: 1.195 | eCPM: $78,40 | CTR: 38,66% | Receita: $93,69
 
 cc: @Jader Peterson @Terry Damasio @Marcillio - AdOps Pleno InCred
 ```
@@ -240,7 +240,7 @@ Formato **PT-BR**: ponto no milhar, vírgula no decimal. `$135,49`, `196.066 req
 6. Usei `FINAL` nas tabelas físicas e não usei nas views. Nenhum alias igual ao nome da coluna.
 7. Conferi a razão `unique_sessions / session_starts` e avisei se passou de 1,5.
 8. Farol pela regra 100/85, igual em todas as linhas.
-9. D0 marcado como parcial, com a hora e o percentual do volume de um dia cheio.
-10. Top 10 com as quatro métricas `AD_EXCHANGE_*` validadas, sem `AD_REQUESTS` e sem match rate, com a data no título e o total conferido contra a receita do dia.
+9. Colunas em D0, D-1 e D-2 de calendário, sem substituir a segunda por sexta. D0 marcado como parcial, com a hora.
+10. Top 10 sobre **D0**, com a data de hoje no título, com as quatro métricas `AD_EXCHANGE_*` validadas e sem `AD_REQUESTS` nem match rate.
 11. Cenário, Gargalo e Ações escritos como rascunho para o operador revisar, sem decisão inventada.
 12. Se publiquei em Doc, usei as convenções de markdown do ClickUp e a menção com ID numérico.
