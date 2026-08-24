@@ -24,7 +24,9 @@ Diferente da `report-diario-monetizacao`, que é por source de um squad. Esta é
 
 Um site por vez. O operador diz qual. Exemplo do formato validado: `oguiadocredito.com`.
 
-Três colunas de dado: **D0** (hoje, parcial), **D-1** e **D-2**. Na segunda, usar sexta como D-1 e sábado/domingo conforme o operador pedir.
+Três colunas de dado: **D0** (hoje, parcial), **D-1** e **D-2**.
+
+**Na segunda, abrir quatro colunas:** D0, domingo, sábado e sexta. Sem isso o fim de semana desaparece do histórico. A leitura de referência é o domingo, que é o último dia fechado.
 
 ## Metas
 
@@ -42,17 +44,19 @@ Ou a meta subiu no dia, ou um dos dois está com número velho. Como a meta é o
 
 ## Métricas e fórmulas
 
-| Métrica | Fórmula |
-|---|---|
-| RPMS | `revenue / session_starts * 1000` |
-| eCPM | `revenue / impressions * 1000` |
-| Requests | `total_requests` |
-| FR | `impressions / total_requests * 100` |
-| MR | `responses_served / total_requests * 100` |
+| Métrica | Fórmula | Fonte |
+|---|---|---|
+| RPMS | `gam_revenue / sessions * 1000` | GAM + analytics |
+| eCPM | `gam_revenue / gam_ad_impressions * 1000` | GAM |
+| Requests | `gam_ad_requests` | GAM |
+| FR | `gam_ad_impressions / gam_ad_requests * 100` | GAM |
+| MR | `gam_responses_served / gam_ad_requests * 100` | GAM |
 
-**Cuidado com o denominador do RPMS neste report.** Como aqui o grão é o site inteiro, ele soma sources de aquisição com sources de retenção, e a `session_starts` das sources de aquisição está quebrada na origem. Sinal de sessão quebrada: razão `unique_sessions / session_starts` **acima de 1,5** (nas sãs fica entre 1,0 e 1,2).
+O RPMS é o único que cruza duas fontes: receita do GAM sobre sessão do analytics. As outras quatro saem todas de `gam_report_daily_domain`.
 
-Se a razão do site estourar 1,5, avisar na nota de rodapé e oferecer a versão em **uRPMS** (`revenue / unique_sessions * 1000`). Nunca trocar a métrica em silêncio, e nunca misturar as duas na mesma coluna sem rótulo.
+**Cuidado com o denominador do RPMS neste report.** Como aqui o grão é o site inteiro, ele soma sources de aquisição com sources de retenção, e a `session_starts` das sources de aquisição está quebrada na origem. Para checar, rodar na fact a razão `unique_sessions / session_starts`: **acima de 1,5** é sinal de sessão quebrada, e nas sãs fica entre 1,0 e 1,2. No oguiadocredito.com em 19 a 24/08/2026 ficou entre 1,09 e 1,16, ou seja saudável.
+
+Se a razão estourar 1,5, avisar na nota de rodapé e oferecer a versão em **uRPMS**. Nunca trocar a métrica em silêncio, e nunca misturar as duas na mesma coluna sem rótulo.
 
 ## Farol
 
@@ -77,28 +81,39 @@ GROUP BY date ORDER BY date
 
 Se a receita de D-1 estiver muito abaixo dos dias anteriores, **parar e avisar**. GAM atrasado é o cenário que mais parece queda real sem ser: o denominador está completo e o numerador não, então RPMS despenca sozinho.
 
-### Query principal (Mesh, preferencial)
+### Query principal (Mesh)
 
-Uma query cobre a tabela inteira. Agregar por dia, somando as sources do site:
+**Duas queries, e a fonte importa.** Validado em 24/08/2026 contra os posts publicados de 19, 20 e 21/08: esta combinação reproduz os números na segunda casa decimal.
+
+O lado de anúncio vem de `gam_report_daily_domain FINAL`:
 
 ```sql
-SELECT dt,
-       toUInt64(sum(total_requests))                                  AS req,
-       round(sum(responses_served)/nullif(sum(total_requests),0)*100,2) AS mr,
-       round(sum(impressions)/nullif(sum(total_requests),0)*100,2)     AS fr,
-       round(sum(revenue),2)                                          AS tot_revenue,
-       round(sum(revenue)/nullif(sum(impressions),0)*1000,2)          AS ecpm,
-       round(sum(revenue)/nullif(sum(session_starts),0)*1000,2)       AS rpms,
-       round(sum(revenue)/nullif(sum(unique_sessions),0)*1000,2)      AS urpms,
-       round(sum(unique_sessions)/nullif(sum(session_starts),0),2)    AS razao_sessao
-FROM vw_fact_content_metrics_by_domain_channel_source
-WHERE dt >= 'D-2' AND dt <= 'HOJE' AND domain = '<site>'
-GROUP BY dt ORDER BY dt
+SELECT date,
+       toUInt64(sum(gam_ad_requests))                                       AS req,
+       toUInt64(sum(gam_ad_impressions))                                    AS imp,
+       round(sum(gam_revenue),2)                                            AS rev,
+       round(sum(gam_responses_served)/nullif(sum(gam_ad_requests),0)*100,2) AS mr,
+       round(sum(gam_ad_impressions)/nullif(sum(gam_ad_requests),0)*100,2)   AS fr,
+       round(sum(gam_revenue)/nullif(sum(gam_ad_impressions),0)*1000,2)      AS ecpm
+FROM gam_report_daily_domain FINAL
+WHERE date >= 'D-2' AND date <= 'HOJE' AND domain = '<site>'
+GROUP BY date ORDER BY date
 ```
 
-Rodar a mesma query **sem** o `GROUP BY dt` colapsado, quebrando por `channel_source`, quando o operador perguntar de onde veio a variação. Isso não entra na tabela, entra no Cenário.
+A sessão, que é o denominador do RPMS, vem de `vw_analytics_by_domain_source`:
 
-**Views de apoio:** `gam_report_daily_domain_channel_source FINAL` para requests, responses e receita por source; `vw_analytics_by_domain_source` para sessão por `utm_source`; `gam_report_daily_domain_adunit_channel_source FINAL` para impressão por bloco.
+```sql
+SELECT date, toUInt64(sum(sessions)) AS sessions, toUInt64(sum(unique_users)) AS users
+FROM vw_analytics_by_domain_source
+WHERE date >= 'D-2' AND date <= 'HOJE' AND domain = '<site>'
+GROUP BY date ORDER BY date
+```
+
+`RPMS = rev / sessions * 1000`, calculado fora do SQL com os dois resultados.
+
+**NÃO usar `vw_fact_content_metrics_by_domain_channel_source` para esta tabela.** Ela diverge do GAM em parte dos dias: em 19/08/2026 devolveu 226.793 requests e RPMS de $154,10 contra 196.080 e $135,47 da fonte certa, uma diferença de 14% no volume e 14% no RPMS. Em outros dias as duas batem, o que é pior, porque o erro é intermitente e não aparece sempre. Use a fact só para quebra por `channel_source` dentro do Cenário, nunca para a tabela.
+
+**Views de apoio:** `gam_report_daily_domain_channel_source FINAL` para a quebra por source, com a ressalva abaixo; `gam_report_daily_domain_adunit_channel_source FINAL` para impressão por bloco.
 
 ### Armadilhas do Mesh
 
@@ -108,17 +123,22 @@ Rodar a mesma query **sem** o `GROUP BY dt` colapsado, quebrando por `channel_so
 - A palavra `SYSTEM` no SQL é bloqueada.
 - Sem filtro de `domain`, a query traz a rede inteira.
 - Na fact, `domain` é o **hostname**, não o apex. Para casar com relatório do GAM por apex, juntar por `site_name`.
+- **`channel_name` conta o site duas vezes.** Em `gam_report_daily_domain_channel_source` o campo mistura duas famílias de chave: existe a linha `sqd=adsup_br1`, que é o site inteiro, e existem as linhas `utm_source=*`, que somam o mesmo site. Somar todos os `channel_name` dobra o total: em 21/08/2026 deu 422.845 requests num dia de 196.080. Filtrar `channel_name LIKE 'utm_source=%'` para a quebra por source, ou `channel_name LIKE 'sqd=%'` para o total, **nunca os dois juntos**.
+- Também existe uma segunda network no mesmo domínio, `22277837561`, com volume residual de dezenas de requisições. Não muda o número, mas aparece se você agrupar por `network_code`. A nossa é `22002220734`.
 
 ### Top 10 anunciantes (GAM)
 
-Por padrão, sobre **D-1 fechado**. Mix de anunciante em dia parcial é ruído. Se o operador quiser D0, ele pede, e o título leva a data explícita do que foi usado.
+Por padrão, sobre o **último dia fechado**, com a data explícita no título. Mix de anunciante em dia parcial é ruído: numa segunda às 7h o site inteiro tem 2.005 impressões.
+
+Os posts de referência usam **D0 no horário do post**. Dá para ver no de 21/08, onde o Be Growth aparece com 2.329 impressões contra 53.678 do dia fechado. Se o operador preferir manter D0, é ele que pede, e a data no título muda junto.
 
 1. Confirmar o `networkCode` do domínio em `dim_sites` antes de rodar. A maioria dos domínios está em FDR|GRIDMIDIA (`22002220734`), mas domínio de outra squad fica em rede própria.
-2. Rodar `gam_list_report_fields` na primeira vez do dia e conferir o nome exato das métricas. **Não chutar enum.**
-3. `gam_run_custom_report` com dimension `CLASSIFIED_ADVERTISER_NAME` (junto com `AD_UNIT_NAME` só quando o operador quiser a quebra por bloco).
-4. **Só métricas da família `AD_EXCHANGE_*`.** Impressões, eCPM médio, receita, cliques, CTR e requisições todas têm variante `AD_EXCHANGE_`. Misturar `AD_REQUESTS` ou `PROGRAMMATIC_MATCH_RATE` num report multi-dimensão faz a API **rejeitar a chamada**.
-5. Filtros: `{"fieldName":"SITE","values":["<site>"],"not":false}` e, quando for por source, `{"fieldName":"CHANNEL","operation":"CONTAINS","values":["utm_source=<source>"]}`.
-6. Ordenar por impressões, cortar em 10.
+2. `gam_run_custom_report` com dimension `CLASSIFIED_ADVERTISER_NAME` (junto com `AD_UNIT_NAME` só quando o operador quiser a quebra por bloco).
+3. Métricas validadas nessa dimensão, use exatamente estas quatro: `AD_EXCHANGE_IMPRESSIONS`, `AD_EXCHANGE_AVERAGE_ECPM`, `AD_EXCHANGE_CTR`, `AD_EXCHANGE_REVENUE`.
+4. **`AD_REQUESTS` não funciona com anunciante.** Testado em 24/08/2026 nas duas formas, com cinco métricas e com ela sozinha: as duas voltam `REPORT_ERROR_CONSTRAINTS_INCOMPATIBILITY`. Ou seja, **não existe coluna Req por anunciante neste relatório**. Se o operador pedir, dizer que não sai daqui em vez de improvisar. O mesmo vale para `PROGRAMMATIC_MATCH_RATE`.
+5. **Não pedir `AD_EXCHANGE_MATCH_RATE` nessa dimensão.** Ela volta 100% em todos os anunciantes, porque no grão do anunciante só existe quem já ganhou o leilão. Número sem significado na tabela.
+6. Filtros: `{"fieldName":"SITE","values":["<site>"],"not":false}` e, quando for por source, `{"fieldName":"CHANNEL","operation":"CONTAINS","values":["utm_source=<source>"]}`.
+7. Ordenar por impressões, cortar em 10. Conferir o total do `summary` contra a receita do dia em `gam_report_daily_domain`: em 21/08/2026 deu $10.742,55 contra $10.742,83, o que valida a chamada.
 
 Quando o operador quiser causa de queda, rodar D-1 e D-2 em chamadas separadas de um dia cada e comparar participação: anunciante que **saiu** ou **caiu de participação** é candidato a causa.
 
@@ -152,10 +172,10 @@ Ações para hoje (ordem de prioridade):
 📊 <Nome do site>
 
 1º <Anunciante>
- ¬ Impressões: 2.329 | eCPM: $85,82 | CTR: 45,43% | Receita: $199,88 | Req: 4.559
+ ¬ Impressões: 53.678 | eCPM: $117,18 | CTR: 58,04% | Receita: $6.289,96
 
 2º <Anunciante>
- ¬ Impressões: 1.195 | eCPM: $78,40 | CTR: 38,66% | Receita: $93,69 | Req: 1.996
+ ¬ Impressões: 14.586 | eCPM: $84,98 | CTR: 49,22% | Receita: $1.239,50
 
 cc: @Jader Peterson @Terry Damasio @Marcillio - AdOps Pleno InCred
 ```
@@ -216,11 +236,11 @@ Formato **PT-BR**: ponto no milhar, vírgula no decimal. `$135,49`, `196.066 req
 2. Confirmei que D-1 consolidou no `gam_report_daily_domain`.
 3. Confirmei a meta vigente do mês com o operador.
 4. Filtrei por domínio.
-5. Usei `FINAL` nas tabelas físicas e não usei nas views.
-6. Nenhum alias igual ao nome da coluna.
+5. Tirei a tabela de `gam_report_daily_domain` mais `vw_analytics_by_domain_source`, **não** da fact.
+6. Usei `FINAL` nas tabelas físicas e não usei nas views. Nenhum alias igual ao nome da coluna.
 7. Conferi a razão `unique_sessions / session_starts` e avisei se passou de 1,5.
 8. Farol pela regra 100/85, igual em todas as linhas.
-9. D0 marcado como parcial.
-10. Top 10 sobre D-1 fechado, com a data no título, e só com métricas `AD_EXCHANGE_*`.
+9. D0 marcado como parcial, com a hora e o percentual do volume de um dia cheio.
+10. Top 10 com as quatro métricas `AD_EXCHANGE_*` validadas, sem `AD_REQUESTS` e sem match rate, com a data no título e o total conferido contra a receita do dia.
 11. Cenário, Gargalo e Ações escritos como rascunho para o operador revisar, sem decisão inventada.
 12. Se publiquei em Doc, usei as convenções de markdown do ClickUp e a menção com ID numérico.
