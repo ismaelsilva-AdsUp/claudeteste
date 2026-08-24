@@ -40,23 +40,29 @@ Se quiser, publica também em página de Doc do ClickUp, com a formatação que 
 
 1. Roda `date` e ancora D0, D-1 e D-2 no calendário, nunca na data máxima do dado.
 2. **Confere se D-1 consolidou no GAM.** Se não fechou, ela para e avisa em vez de montar report falso.
-3. Puxa a tabela inteira numa query só, em `vw_fact_content_metrics_by_domain_channel_source`, agregando as sources do site.
-4. Calcula: RPMS sobre sessão iniciada, eCPM sobre impressão, FR e MR sobre requisição.
+3. Puxa o lado de anúncio de `gam_report_daily_domain` e a sessão de `vw_analytics_by_domain_source`.
+4. Calcula: RPMS sobre sessão, eCPM sobre impressão, FR e MR sobre requisição.
 5. Farol contra a meta do mês, mesma regra em todas as linhas.
-6. Puxa o Top 10 de anunciantes no GAM sobre D-1 fechado.
+6. Puxa o Top 10 de anunciantes no GAM sobre o último dia fechado.
 7. Monta o post e devolve no chat, com Cenário, Gargalo e Ações como rascunho para você revisar.
 
 O passo 2 é o menos óbvio e o mais importante. Quando o GAM atrasa a consolidação, a sessão está completa e a receita não, então o RPMS despenca e parece queda real.
 
 ## Os gotchas que ela resolve
 
+Os quatro primeiros foram descobertos rodando a skill de verdade em 24/08/2026 e conferindo contra os posts publicados de 19, 20 e 21/08. Sem essa conferência eu teria entregue números 14% errados com cara de certos.
+
+- **A fonte certa é `gam_report_daily_domain`, não a fact.** `vw_fact_content_metrics_by_domain_channel_source` diverge do GAM em parte dos dias: em 19/08 devolveu 226.793 requests e RPMS de $154,10 contra 196.080 e $135,47 da fonte certa, e o post publicado dizia $135,49. Em outros dias as duas batem, o que é pior, porque o erro é intermitente.
+- **`channel_name` conta o site duas vezes.** O campo mistura a chave `sqd=adsup_br1`, que é o site inteiro, com as chaves `utm_source=*`, que somam o mesmo site. Somar tudo dobra: 422.845 requests num dia de 196.080. Filtrar uma família só.
+- **`AD_REQUESTS` não funciona com anunciante no GAM.** Testado nas duas formas, com cinco métricas e sozinha, e as duas voltam `REPORT_ERROR_CONSTRAINTS_INCOMPATIBILITY`. Não existe coluna Req por anunciante nesse relatório, e a skill diz isso em vez de improvisar.
+- **`AD_EXCHANGE_MATCH_RATE` por anunciante volta 100% sempre**, porque nesse grão só existe quem ganhou o leilão. Número sem significado, fica fora da tabela.
 - **Views `vw_*` rejeitam `FINAL`, tabelas físicas exigem.** Sem `FINAL` na tabela física a receita infla. Com `FINAL` na view, a query quebra.
 - **Alias igual ao nome da coluna quebra a agregação.** `AS tot_revenue`, nunca `AS revenue`.
 - **Ordem é `FROM tabela AS x FINAL`**, não `FROM tabela FINAL AS x`.
 - **Sem filtro de `domain` a query traz a rede inteira.**
 - **A palavra `SYSTEM` no SQL é bloqueada.**
 - **`domain` na fact é hostname, não apex.** Para casar com relatório do GAM por apex, juntar por `site_name`.
-- **No GAM, report multi-dimensão aceita só métricas `AD_EXCHANGE_*`.** Misturar `AD_REQUESTS` ou `PROGRAMMATIC_MATCH_RATE` faz a API rejeitar a chamada. Impressão, eCPM, receita, clique, CTR e requisição todas têm a variante `AD_EXCHANGE_`.
+- **No GAM, só as quatro métricas `AD_EXCHANGE_*` validadas.** São `AD_EXCHANGE_IMPRESSIONS`, `AD_EXCHANGE_AVERAGE_ECPM`, `AD_EXCHANGE_CTR` e `AD_EXCHANGE_REVENUE`. `AD_REQUESTS` e `PROGRAMMATIC_MATCH_RATE` fazem a API rejeitar a chamada.
 - **Confirmar o `networkCode` do domínio em `dim_sites` antes de rodar.** A maioria está em FDR|GRIDMIDIA (22002220734), mas domínio de outra squad fica em rede própria.
 - **RPMS de site inteiro herda a `session_starts` quebrada das sources de aquisição.** Ela checa a razão `unique_sessions / session_starts`: acima de 1,5 é sinal de sessão quebrada, e aí ela avisa e oferece a versão em uRPMS. Nunca troca a métrica em silêncio.
 - **Publicar tabela em Doc do ClickUp exige markdown GFM com a linha separadora**, menção com `[@Nome](#user_mention#ID)` e link de task com colchete escapado. Sem isso a menção fica texto solto e o link não linka.
@@ -66,7 +72,7 @@ O passo 2 é o menos óbvio e o mais importante. Quando o GAM atrasa a consolida
 Os dois posts de referência foram feitos à mão, e discordam entre si em dois pontos. Escolhi um caminho em cada, e cada um é uma linha para trocar:
 
 1. **Farol normalizado pela regra 100/85.** No post de 21/08 o RPMS a 58% da meta está marcado 🟡, e o MR a 96% está 🟢. Aplicando a regra 🟢 ≥100% / 🟡 85–99% / 🔴 <85%, viram 🔴 e 🟡. A skill aplica a regra igual em todas as linhas, inclusive em D0. Se a convenção real do time for outra, tipo D0 sem farol ou meta pro-rata na coluna parcial, me diz e eu ajusto.
-2. **Top 10 sobre D-1 fechado.** O modelo traz o Top 10 com a data do próprio post, que é D0. Mix de anunciante em dia parcial oscila muito, então o padrão ficou D-1, com a data explícita no título. Se você quiser D0, é só pedir na hora.
+2. **Top 10 sobre o último dia fechado, e não sobre D0.** O dado resolveu essa dúvida: no post de 21/08 o Be Growth aparece com 2.329 impressões, e o dia fechado deu 53.678, ou seja 23 vezes mais. Então a convenção real do time é D0 no horário do post. Mantive o dia fechado como padrão porque numa segunda às 7h o parcial tem 2.005 impressões no site todo, o que é ruído, mas a data vai explícita no título e trocar o padrão é uma linha.
 
 ## Um terceiro ponto que precisa da sua resposta
 
