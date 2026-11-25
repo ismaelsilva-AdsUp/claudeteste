@@ -1,20 +1,32 @@
 <script>
 /*
- * top-rec-gate — o top_rec só é pedido ao Google depois que o offerwall fechar.
- * Vale para qualquer URL: se não houver offerwall na tela, não faz nada.
+ * top-rec-gate — o top_rec só é pedido ao Google depois que o offerwall sair da tela.
+ * Vale para qualquer URL e não tem lista de páginas: se não há offerwall, não faz nada (zero atraso).
  *
  * Como funciona: o wrapper só pede anúncio ao Google em googletag.pubads().refresh(slots).
- * Aqui esse método é interceptado: enquanto o modal do offerwall (dialog[adseleto-offerwall])
- * estiver no DOM, os slots de top_rec ficam guardados; os demais blocos seguem normalmente.
- * O wrapper remove o modal do DOM quando o offerwall termina (usuário clicou, viu o anúncio e
- * fechou, ou o offerwall falhou/sem anúncio). Nesse momento o top_rec é pedido.
+ * Esse método é interceptado. Enquanto houver offerwall ativo, os slots de top_rec ficam guardados
+ * e os demais blocos seguem normalmente. "Offerwall ativo" é qualquer um destes:
+ *   - o modal do offerwall do wrapper (dialog[adseleto-offerwall]) está no DOM;
+ *   - um slot de offerwall (ad unit terminado em "offerwall", com ou sem sufixo: _meta, _native...)
+ *     foi pedido ao Google e ainda não foi resolvido (offerwall nativo do Google, ou o do wrapper).
+ *
+ * O top_rec é liberado quando:
+ *   - o usuário fecha o offerwall (modal removido pelo wrapper, ou rewardedSlotClosed no slot nativo);
+ *   - o offerwall não carrega (sem anúncio, ou não renderizou em NOT_LOADED_MS);
+ *   - passou MAX_HOLD_MS (trava de segurança).
+ *
+ * Por que não segurar o wrapper inteiro (adseleto.queue): o offerwall do wrapper é criado dentro da
+ * própria inicialização; segurá-la impediria o offerwall de nascer.
  *
  * Colocar no <head>, ANTES do script do wrapper. Nada precisa ser removido da config.
  * Debug: ?gatedebug loga no console o que foi segurado/liberado | ?nogate desliga o snippet.
  */
 (function () {
   var HOLD_UNITS = /top_rec/i;                   // último trecho do ad unit que deve esperar o offerwall
-  var OFFERWALL = 'dialog[adseleto-offerwall]';  // modal do offerwall criado pelo wrapper
+  var OFFERWALL_UNITS = /offerwall/i;            // último trecho do ad unit que identifica o offerwall
+  var OFFERWALL_DIALOG = 'dialog[adseleto-offerwall]';  // modal do offerwall criado pelo wrapper
+  var NOT_LOADED_MS = 10000;                     // offerwall pedido e não renderizado nesse tempo: libera
+  var MAX_HOLD_MS = 120000;                      // nada resolveu o offerwall nesse tempo: libera mesmo assim
 
   if (/[?&]nogate(&|=|$)/.test(location.search)) return;
   var debug = /[?&]gatedebug(&|=|$)/.test(location.search);
@@ -27,59 +39,109 @@
   googletag.cmd.push(function () {
     var svc = googletag.pubads();
     var origRefresh = svc.refresh;
-    var held = [];       // [{ slots, opts }]
-    var observer = null;
-    var poll = null;
+    var held = [];        // [{ slots, opts }]
+    var pending = [];     // offerwalls pedidos e ainda não resolvidos: [{ slot, loaded, timer }]
+    var observer = null, poll = null, maxTimer = null;
 
-    function offerwallOpen() { return !!document.querySelector(OFFERWALL); }
     function unitName(slot) { try { return slot.getAdUnitPath(); } catch (e) { return ''; } }
-    function shouldHold(slot) { return HOLD_UNITS.test(unitName(slot).split('/').pop()); }
+    function lastSegment(slot) { return unitName(slot).split('/').pop(); }
+    function isOfferwallSlot(slot) { return !!slot && OFFERWALL_UNITS.test(lastSegment(slot)); }
+    function shouldHold(slot) { return HOLD_UNITS.test(lastSegment(slot)); }
     function names(slots) { return slots.map(unitName).join(', '); }
+    function isLive(slot) { return svc.getSlots().indexOf(slot) !== -1; }
     function callRefresh(slots, opts) {
       return opts === undefined ? origRefresh.call(svc, slots) : origRefresh.call(svc, slots, opts);
     }
-    function isHeldAlready(slot) {
-      return held.some(function (b) { return b.slots.indexOf(slot) !== -1; });
-    }
 
-    function release() {
-      if (offerwallOpen()) return;
-      if (observer) { observer.disconnect(); observer = null; }
-      if (poll) { clearInterval(poll); poll = null; }
-      var batches = held;
-      held = [];
-      var live = svc.getSlots();  // ignora slots destruídos enquanto esperavam
-      batches.forEach(function (b) {
-        var slots = b.slots.filter(function (s) { return live.indexOf(s) !== -1; });
-        if (!slots.length) return;
-        log('offerwall fechou, pedindo: ' + names(slots));
-        callRefresh(slots, b.opts);
+    function findPending(slot) {
+      for (var i = 0; i < pending.length; i++) if (pending[i].slot === slot) return pending[i];
+      return null;
+    }
+    function markOfferwall(slot) {
+      if (findPending(slot)) return;
+      var p = { slot: slot, loaded: false, timer: null };
+      p.timer = setTimeout(function () {
+        if (p.loaded) return;
+        log('offerwall não carregou em ' + NOT_LOADED_MS + 'ms: ' + unitName(slot));
+        unmarkOfferwall(slot);
+        tryRelease();
+      }, NOT_LOADED_MS);
+      pending.push(p);
+      log('offerwall pedido: ' + unitName(slot));
+    }
+    function unmarkOfferwall(slot) {
+      pending = pending.filter(function (p) {
+        if (p.slot !== slot) return true;
+        clearTimeout(p.timer);
+        return false;
       });
     }
 
+    function offerwallActive() {
+      if (document.querySelector(OFFERWALL_DIALOG)) return true;
+      return pending.some(function (p) { return isLive(p.slot); });  // slot destruído deixa de contar
+    }
+
+    function flush(why) {
+      if (observer) { observer.disconnect(); observer = null; }
+      if (poll) { clearInterval(poll); poll = null; }
+      if (maxTimer) { clearTimeout(maxTimer); maxTimer = null; }
+      var batches = held;
+      held = [];
+      batches.forEach(function (b) {
+        var slots = b.slots.filter(isLive);  // ignora slots destruídos enquanto esperavam
+        if (!slots.length) return;
+        log('liberando (' + why + '): ' + names(slots));
+        callRefresh(slots, b.opts);
+      });
+    }
+    function tryRelease() {
+      if (held.length && !offerwallActive()) flush('offerwall fechou');
+    }
+
     function watch() {
+      if (!maxTimer) maxTimer = setTimeout(function () { flush('limite de ' + MAX_HOLD_MS + 'ms'); }, MAX_HOLD_MS);
       if (observer || poll) return;
       if (window.MutationObserver && document.body) {
-        observer = new MutationObserver(release);
+        observer = new MutationObserver(tryRelease);
         observer.observe(document.body, { childList: true });  // o modal é filho direto do body
       }
-      poll = setInterval(release, 1000);                        // rede de segurança
+      poll = setInterval(tryRelease, 1000);                     // rede de segurança
     }
+
+    // Eventos do próprio Google: offerwall nativo (sem modal do wrapper) e fim do offerwall do wrapper
+    svc.addEventListener('slotRequested', function (e) {
+      if (isOfferwallSlot(e.slot)) markOfferwall(e.slot);
+    });
+    svc.addEventListener('slotRenderEnded', function (e) {
+      if (!isOfferwallSlot(e.slot)) return;
+      log('offerwall renderizado, vazio=' + e.isEmpty);
+      if (e.isEmpty) { unmarkOfferwall(e.slot); tryRelease(); return; }  // sem anúncio: não há o que esperar
+      var p = findPending(e.slot);
+      if (p) { p.loaded = true; clearTimeout(p.timer); }
+    });
+    svc.addEventListener('rewardedSlotClosed', function (e) {
+      if (!isOfferwallSlot(e.slot)) return;
+      log('anúncio do offerwall fechado');
+      unmarkOfferwall(e.slot);
+      tryRelease();  // com modal do wrapper ainda na tela (fechou sem recompensa), continua segurando
+    });
 
     svc.refresh = function (slots, opts) {
       var list = slots || svc.getSlots();
-      if (!offerwallOpen()) return callRefresh(slots, opts);
+      list.forEach(function (s) { if (isOfferwallSlot(s)) markOfferwall(s); });  // offerwall no mesmo lote
+      if (!offerwallActive()) return callRefresh(slots, opts);
 
       var hold = [], pass = [];
       list.forEach(function (s) { (shouldHold(s) ? hold : pass).push(s); });
 
+      hold = hold.filter(function (s) {
+        return !held.some(function (b) { return b.slots.indexOf(s) !== -1; });
+      });
       if (hold.length) {
-        hold = hold.filter(function (s) { return !isHeldAlready(s); });
-        if (hold.length) {
-          held.push({ slots: hold, opts: opts });
-          log('offerwall aberto, segurando: ' + names(hold));
-          watch();
-        }
+        held.push({ slots: hold, opts: opts });
+        log('offerwall ativo, segurando: ' + names(hold));
+        watch();
       }
       if (pass.length) {
         log('passando direto: ' + names(pass));
